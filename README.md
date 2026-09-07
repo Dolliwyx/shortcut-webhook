@@ -151,6 +151,50 @@ Use a host that supports a long-running Node.js process, environment variables, 
 7. [Connect the Shortcut webhook](#connect-the-shortcut-webhook) to the deployed URL.
 8. [Verify notification delivery](#verify-notification-delivery).
 
+## Run with Docker
+
+Install Docker and make sure its daemon is running. You don't need Node.js or pnpm on the host for this option.
+
+1. Create `.env` from `.env.example` if it doesn't already exist, then fill in the configuration values listed above. Use `KEY=value` lines without surrounding quotes and keep `PORT=3000`. Docker injects these variables at runtime; `.dockerignore` keeps the file out of the image.
+
+2. From the repository root, build the image:
+
+   ```sh
+   docker build -t shortcut-webhook .
+   ```
+
+3. Start the container:
+
+   ```sh
+   docker run -d \
+     --name shortcut-webhook \
+     --init \
+     --restart unless-stopped \
+     --env-file .env \
+     -p 127.0.0.1:8800:3000 \
+     shortcut-webhook
+   ```
+
+   This maps host port **8800** to container port **3000**, accessible only from the host. Keep `PORT=3000` in `.env`; to change the host port, replace only `8800` in the mapping. The restart policy restarts the container after crashes and VPS reboots unless you explicitly stop it. Ensure Docker starts on boot.
+
+4. Check health and follow logs:
+
+   ```sh
+   curl -i http://127.0.0.1:8800/healthz
+   docker logs -f shortcut-webhook
+   ```
+
+   Expect `200 OK`. Configure a host-installed Caddy or Nginx reverse proxy to provide public HTTPS and forward requests to `127.0.0.1:8800`. Then [connect the Shortcut webhook](#connect-the-shortcut-webhook) and [verify notification delivery](#verify-notification-delivery).
+
+After changing `.env`, stop and remove the container, then repeat the `docker run` command above:
+
+```sh
+docker stop shortcut-webhook
+docker rm shortcut-webhook
+```
+
+Restarting alone doesn't reload environment variables. For code changes, also rebuild the image before creating the replacement container.
+
 ## Troubleshoot the relay
 
 Use the following table to interpret responses and common symptoms:
