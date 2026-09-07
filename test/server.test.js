@@ -120,7 +120,7 @@ async function withFakeDiscord(callback) {
 }
 
 async function postWebhook(baseUrl, rawBody, signature = sign(rawBody)) {
-  return fetch(`${baseUrl}/webhooks/shortcut`, {
+  return fetch(`${baseUrl}/shortcut`, {
     method: 'POST',
     headers: { 'Payload-Signature': signature },
     body: rawBody,
@@ -204,7 +204,7 @@ test('routes health checks and rejects unsupported or unknown routes without ups
     assert.equal(wrongHealthMethod.status, 405);
     assert.equal(wrongHealthMethod.headers.get('allow'), 'GET');
 
-    const wrongWebhookMethod = await fetch(`${baseUrl}/webhooks/shortcut`);
+    const wrongWebhookMethod = await fetch(`${baseUrl}/shortcut`);
     assert.equal(wrongWebhookMethod.status, 405);
     assert.equal(wrongWebhookMethod.headers.get('allow'), 'POST');
 
@@ -221,7 +221,7 @@ test('checks the signature before JSON parsing and distinguishes malformed JSON'
   await withServer(localConfig(), { fetch: async () => assert.fail('no delivery'), logger: logs.push.bind(logs) }, async (baseUrl) => {
     const malformed = Buffer.from('{ definitely not JSON }');
 
-    const missingSignature = await fetch(`${baseUrl}/webhooks/shortcut`, {
+    const missingSignature = await fetch(`${baseUrl}/shortcut`, {
       method: 'POST',
       body: malformed,
     });

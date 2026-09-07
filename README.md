@@ -105,7 +105,7 @@ Before you register the webhook, expose the local port through an HTTPS tunnel o
 1. In Shortcut's outgoing webhook settings, set the destination to:
 
    ```text
-   https://PUBLIC_HOST/webhooks/shortcut
+   https://PUBLIC_HOST/shortcut
    ```
 
    Replace `PUBLIC_HOST` with your tunnel or deployment hostname.

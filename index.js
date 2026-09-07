@@ -130,7 +130,7 @@ async function handleRequest(request, response, config, dependencies) {
     return;
   }
 
-  if (pathname !== '/webhooks/shortcut') {
+  if (pathname !== '/shortcut') {
     discardRequestBody(request);
     sendResponse(response, 404);
     return;
