@@ -1,0 +1,19 @@
+# Dependencies and local pnpm store
+node_modules/
+.pnpm-store/
+
+# Local secrets (keep the shared template)
+.env
+.env.*
+!.env.example
+
+# Logs and test coverage
+*.log
+coverage/
+
+# Local agent task state
+/.pi/tasks/
+
+# OS metadata
+.DS_Store
+Thumbs.db
