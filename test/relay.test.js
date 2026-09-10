@@ -253,6 +253,44 @@ test('delivers a created Story owned through its direct synthetic owner_ids shap
   assert.deepEqual(result.actionTypes, ['story.create']);
 });
 
+test('includes creation descriptions with Markdown and line breaks only inside the embed', () => {
+  const description = '**Details**\n\n- First item\n- Notify @everyone <@987654321>';
+  const result = deliver(syntheticEvent({
+    actions: [storyAction(301, 'create', { ownerIds: [TARGET_MEMBER_ID], description })],
+  }));
+  assert.equal(result.payload.embeds[0].description, `Story created\n\n${description}`);
+  assert.equal(result.payload.content, `<@${DISCORD_USER_ID}>`);
+  assert.deepEqual(result.payload.allowed_mentions, { users: [DISCORD_USER_ID] });
+});
+
+test('omits unavailable creation descriptions and bounds long descriptions in both layouts', () => {
+  for (const description of [undefined, null, 12, {}, '', '  \n  ']) {
+    const result = deliver(syntheticEvent({
+      actions: [storyAction(301, 'create', { ownerIds: [TARGET_MEMBER_ID], description })],
+    }));
+    assert.equal(result.payload.embeds[0].description, 'Story created');
+  }
+  for (const count of [1, 10]) {
+    const result = deliver(syntheticEvent({
+      actions: Array.from({ length: count }, (_, index) => storyAction(301 + index, 'create', {
+        ownerIds: [TARGET_MEMBER_ID],
+        description: 'Details\n'.repeat(1000),
+      })),
+    }));
+    const embed = result.payload.embeds[0];
+    if (count === 1) {
+      assert.ok(embed.description.length <= 4096);
+      assert.match(embed.description, /^Story created\n\nDetails\n/);
+      assert.match(embed.description, /omitted$/);
+    } else {
+      assert.ok(embed.fields.every((field) => field.value.length <= 1024));
+      assert.match(embed.fields[0].value, /Story created\n\nDetails\n/);
+      assert.match(embed.fields.at(-1).value, /Story groups omitted/);
+    }
+    assert.ok(embedCharacterCount(embed) <= 6000);
+  }
+});
+
 test('delivers ownership addition and removal without aggregate ownership', () => {
   for (const [change, expectedSummary] of [
     [ownerIdsChange({ adds: [TARGET_MEMBER_ID] }), 'You were added as an owner'],

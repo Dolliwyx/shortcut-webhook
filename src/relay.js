@@ -265,7 +265,9 @@ function evaluateGroups({
         summaries.push({
           index: actionRecord.index,
           actionType: 'story.create',
-          text: 'Story created',
+          text: isNonemptyString(action.description)
+            ? `Story created\n\n${action.description.trim()}`
+            : 'Story created',
         });
         continue;
       }
