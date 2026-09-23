@@ -304,7 +304,9 @@ test('delivers one real HTTP JSON Discord request with wait=true', async () => {
     assert.match(request.headers['content-type'], /^application\/json(?:;|$)/u);
 
     const payload = JSON.parse(request.body);
-    assert.equal(payload.content, `<@${DISCORD_USER_ID}>`);
+    assert.deepEqual(Object.keys(payload).sort(), ['allowed_mentions', 'content']);
+    assert.ok(payload.content.startsWith(`<@${DISCORD_USER_ID}> Story created\nChanged: 2025-01-02T03:04:05.000Z\n\n[PRIVATE STORY TITLE \\(\\#42\\)](https://app.shortcut.com/example-workspace/story/42)\nStory created`));
+    assert.ok(payload.content.length <= 2000);
     assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
 
     assert.equal(logs.length, 1);
@@ -524,9 +526,10 @@ test('confirmed comment shape sends one bounded Discord message without logging 
     });
     assert.equal(requests.length, 1);
     const payload = JSON.parse(requests[0].body);
-    assert.equal(payload.embeds[0].description, 'Comment added\n> Example comment text');
-    assert.match(payload.embeds[0].url, /\/story\/501$/);
-    assert.equal(payload.content, `<@${DISCORD_USER_ID}>`);
+    assert.deepEqual(Object.keys(payload).sort(), ['allowed_mentions', 'content']);
+    assert.ok(payload.content.includes('[Example Story \\(\\#501\\)](https://app.shortcut.com/example-workspace/story/501)'));
+    assert.match(payload.content, /Comment added\n> Example comment text/u);
+    assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}> Comment added.*\\nChanged: `));
     assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
     assert.equal(JSON.parse(logs.at(-1)).outcome, 'delivered');
     assert.equal(logs.join('\n').includes('Example comment'), false);
@@ -534,7 +537,7 @@ test('confirmed comment shape sends one bounded Discord message without logging 
   });
 });
 
-test('looks up the eligible comment author and includes their name only in the Discord embed', async () => {
+test('looks up the eligible comment author and includes their name only in message content', async () => {
   const event = observedCommentCreate();
   event.member_id = OTHER_MEMBER_ID;
   event.owner_ids = [MEMBER_ID];
@@ -561,8 +564,8 @@ test('looks up the eligible comment author and includes their name only in the D
   });
   assert.equal(requests.length, 2);
   const payload = JSON.parse(requests[1].init.body);
-  assert.equal(payload.embeds[0].description, '**Alice Example** commented\n> Example comment text');
-  assert.equal(payload.content, `<@${DISCORD_USER_ID}>`);
+  assert.match(payload.content, /\*\*Alice Example\*\* commented\n> Example comment text/u);
+  assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}> \\*\\*Alice Example\\*\\* commented.*\\nChanged: `));
   assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
   for (const value of ['PRIVATE API TOKEN', 'Alice', 'Example comment text', authorId]) {
     assert.equal(logs.join('\n').includes(value), false, value);
@@ -633,7 +636,7 @@ test('member lookup failures and timeouts never prevent comment delivery', async
     assert.equal(lookups, 1);
     assert.equal(signal.aborted, true);
     assert.equal(payloads.length, 1);
-    assert.equal(payloads[0].embeds[0].description, 'Comment added\n> Example comment text');
+    assert.match(payloads[0].content, /Comment added\n> Example comment text/u);
   }
 });
 

@@ -2,7 +2,7 @@
 
 Use this Node.js service to notify one Discord user about meaningful changes to Shortcut Stories they own. The service has no external dependencies.
 
-The relay verifies each Shortcut webhook signature, filters the event, and sends one Discord message for each eligible event. Messages include Story links and a compact change summary. Only the configured Discord user can receive a mention.
+The relay verifies each Shortcut webhook signature, filters the event, and sends one Discord plain-text message for each eligible event. Messages lead with the configured user ping and a short change preview, followed by a timestamp when valid, clickable Story links, and compact change summaries. Shortcut member markup is shown as bold text; untrusted text cannot create extra mentions or Markdown links.
 
 ## Supported notifications
 

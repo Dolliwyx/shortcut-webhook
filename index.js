@@ -240,7 +240,7 @@ async function handleRequest(request, response, config, dependencies) {
     const authorNames = await lookupMemberNames(
       result.commentAuthorIds, config.shortcutApiToken, dependencies.fetchImpl, dependencies.memberTimeoutMs,
     );
-    // Reformat through the same pure path so names obey all existing embed bounds.
+    // Reformat through the same pure path so names obey the content limit.
     result = processEvent(event, { ...relayOptions, authorNames });
   }
 

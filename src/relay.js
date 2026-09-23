@@ -1,10 +1,4 @@
-const MAX_EMBED_TITLE = 256;
-const MAX_EMBED_DESCRIPTION = 4096;
-const MAX_FIELD_NAME = 256;
-const MAX_FIELD_VALUE = 1024;
-const MAX_EMBED_CHARACTERS = 6000;
-const MAX_FIELDS = 25;
-const MAX_STORY_FIELDS_WITH_OMISSION = 24;
+const MAX_DISCORD_CONTENT = 2000;
 const MAX_COMMENT_EXCERPT = 200;
 
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -245,7 +239,7 @@ function evaluateGroups({
         const excerpt = commentExcerpt(action);
         const name = authorNames?.get(action.author_id);
         const author = isNonemptyString(name)
-          ? `**${clipWithEllipsis(normalizeInlineText(name), 80).replace(/[\\`*_~|<>\[\]()]/g, '\\$&')}**`
+          ? `**${formatShortcutText(clipWithEllipsis(normalizeInlineText(name), 80), false)}**`
           : null;
         const label = operation === 'create'
           ? (author ? `${author} commented` : 'Comment added')
@@ -266,7 +260,7 @@ function evaluateGroups({
           index: actionRecord.index,
           actionType: 'story.create',
           text: isNonemptyString(action.description)
-            ? `Story created\n\n${action.description.trim()}`
+            ? `Story created\n\n${formatShortcutText(action.description.trim())}`
             : 'Story created',
         });
         continue;
@@ -385,18 +379,17 @@ function commentExcerpt(action) {
     return null;
   }
 
-  if (normalized.length <= MAX_COMMENT_EXCERPT) {
-    return normalized;
-  }
-
-  return `${clipText(normalized, MAX_COMMENT_EXCERPT - 1)}…`;
+  const excerpt = normalized.length <= MAX_COMMENT_EXCERPT
+    ? normalized
+    : `${clipText(normalized, MAX_COMMENT_EXCERPT - 1)}…`;
+  return formatShortcutText(excerpt);
 }
 
 function workflowDisplayValue(value, workflowReferences) {
   if (isNumericId(value)) {
     const referenceName = workflowReferences.get(String(value));
     if (typeof referenceName === 'string') {
-      return referenceName;
+      return formatShortcutText(referenceName);
     }
   }
 
@@ -409,7 +402,7 @@ function displayValue(value, nullLabel) {
   }
   if (typeof value === 'string') {
     const normalized = normalizeInlineText(value);
-    return normalized.length === 0 ? nullLabel : normalized;
+    return normalized.length === 0 ? nullLabel : formatShortcutText(normalized);
   }
   return String(value);
 }
@@ -430,100 +423,76 @@ function storyTitle(group) {
 }
 
 function buildDiscordPayload(changedAt, groups, options) {
-  const payload = {
-    content: `<@${options.discordUserId}>`,
+  return {
+    content: discordContent(changedAt, groups, options),
     allowed_mentions: { users: [options.discordUserId] },
-    embeds: [],
   };
-
-  if (groups.length === 1) {
-    const group = groups[0];
-    payload.embeds.push({
-      title: storyLabel(group),
-      url: storyUrl(options.workspaceSlug, group.storyId),
-      description: fitTextWithOmission(summaryText(group), MAX_EMBED_DESCRIPTION),
-      timestamp: changedAt,
-    });
-    return payload;
-  }
-
-  const title = clipWithEllipsis(`${groups.length} Shortcut Stories changed`, MAX_EMBED_TITLE);
-  payload.embeds.push({
-    title,
-    timestamp: changedAt,
-    fields: multiStoryFields(title, groups, options.workspaceSlug),
-  });
-  return payload;
 }
 
-function multiStoryFields(embedTitle, groups, workspaceSlug) {
-  const storyFields = groups.map((group) => storyField(group, workspaceSlug));
-  const allFieldsFit =
-    storyFields.length <= MAX_FIELDS &&
-    embedTitle.length + storyFields.reduce((total, field) => total + fieldCharacterCount(field), 0) <= MAX_EMBED_CHARACTERS;
-
-  if (allFieldsFit) {
-    return storyFields;
+function discordContent(changedAt, groups, options) {
+  const timestamp = Date.parse(changedAt);
+  const preview = clipWithEllipsis(summaryText(groups[0]).replace(/\s+/gu, ' '), 120);
+  const prefix = [`<@${options.discordUserId}> ${preview}`, ...(Number.isFinite(timestamp)
+    ? [`Changed: ${new Date(timestamp).toISOString()}`]
+    : [])].join('\n');
+  const blocks = groups.map((group) => storyBlock(group, options.workspaceSlug));
+  const complete = `${prefix}\n\n${blocks.join('\n\n')}`;
+  if (complete.length <= MAX_DISCORD_CONTENT) {
+    return complete;
   }
 
-  // Reserve a field before adding Story fields so an omission report always fits.
-  const reserve = omissionField(groups.length);
-  let characterCount = embedTitle.length + fieldCharacterCount(reserve);
-  const fields = [];
-
-  for (let index = 0; index < storyFields.length && index < MAX_STORY_FIELDS_WITH_OMISSION; index += 1) {
-    const field = storyFields[index];
-    if (characterCount + fieldCharacterCount(field) > MAX_EMBED_CHARACTERS) {
-      break;
+  let content = prefix;
+  for (let index = 0; index < groups.length; index += 1) {
+    const separator = '\n\n';
+    const candidate = `${content}${separator}${blocks[index]}`;
+    const omittedStories = groups.length - index - 1;
+    const omission = omissionText(omittedStories, false);
+    if (candidate.length + (omittedStories > 0 ? separator.length + omission.length : 0) <= MAX_DISCORD_CONTENT) {
+      content = candidate;
+      continue;
     }
-    fields.push(field);
-    characterCount += fieldCharacterCount(field);
+
+    const header = storyHeader(groups[index], options.workspaceSlug);
+    const marker = omissionText(omittedStories, true);
+    const summary = summaryText(groups[index]);
+    const summaryStart = `${content}${separator}${header}\n`;
+    const available = MAX_DISCORD_CONTENT - summaryStart.length - marker.length;
+    if (available >= 0) {
+      return `${summaryStart}${clipText(summary, available)}${marker}`;
+    }
+
+    return `${content}${separator}${omissionText(omittedStories + 1, false)}`;
   }
 
-  fields.push(omissionField(groups.length - fields.length));
-  return fields;
+  return content;
 }
 
-function storyField(group, workspaceSlug) {
-  const link = `[Open Story](${storyUrl(workspaceSlug, group.storyId)})`;
-  const prefix = `${link}\n`;
-  let value;
-
-  if (prefix.length >= MAX_FIELD_VALUE) {
-    value = fitTextWithOmission(prefix, MAX_FIELD_VALUE, '… Story link truncated');
-  } else {
-    value = `${prefix}${fitTextWithOmission(summaryText(group), MAX_FIELD_VALUE - prefix.length)}`;
-  }
-
-  return {
-    name: storyLabel(group),
-    value,
-  };
+function storyBlock(group, workspaceSlug) {
+  return `${storyHeader(group, workspaceSlug)}\n${summaryText(group)}`;
 }
 
-function omissionField(omittedCount) {
-  const noun = omittedCount === 1 ? 'Story group' : 'Story groups';
-  return {
-    name: 'Additional Stories',
-    value: `${omittedCount} ${noun} omitted due to Discord embed limits.`,
-  };
-}
-
-function storyLabel(group) {
-  if (group.title === null) {
-    return `Story #${group.storyId}`;
-  }
-
+function storyHeader(group, workspaceSlug) {
   const suffix = ` (#${group.storyId})`;
-  if (group.title.length + suffix.length <= MAX_FIELD_NAME) {
-    return `${group.title}${suffix}`;
-  }
+  const title = group.title === null
+    ? `Story #${group.storyId}`
+    : `${clipWithEllipsis(group.title, 256 - suffix.length)}${suffix}`;
+  const label = formatShortcutText(title);
+  const url = storyUrl(workspaceSlug, group.storyId);
 
-  return `${clipWithEllipsis(group.title, MAX_FIELD_NAME - suffix.length)}${suffix}`;
+  return url.length <= 1000
+    ? `[${label}](${url})`
+    : `${label} (Shortcut link omitted: workspace URL exceeds message limit)`;
+}
+
+function omissionText(omittedStories, omittedChanges) {
+  const details = [];
+  if (omittedChanges) details.push('additional changes omitted');
+  if (omittedStories > 0) details.push(`${omittedStories} more ${omittedStories === 1 ? 'story' : 'stories'} omitted`);
+  return `\n… ${details.join('; ')}`;
 }
 
 function storyUrl(workspaceSlug, storyId) {
-  return `https://app.shortcut.com/${encodeURIComponent(workspaceSlug)}/story/${storyId}`;
+  return `https://app.shortcut.com/${encodeURIComponent(workspaceSlug).replace(/[()]/gu, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}/story/${storyId}`;
 }
 
 function summaryText(group) {
@@ -560,17 +529,6 @@ function emptyResult(outcome, eventId) {
   return result;
 }
 
-function fitTextWithOmission(text, maximum, omission = '… additional changes omitted') {
-  if (text.length <= maximum) {
-    return text;
-  }
-  if (maximum <= omission.length) {
-    return clipText(omission, maximum);
-  }
-
-  return `${clipText(text, maximum - omission.length)}${omission}`;
-}
-
 function clipWithEllipsis(text, maximum) {
   if (text.length <= maximum) {
     return text;
@@ -597,12 +555,32 @@ function clipText(text, maximum) {
   return text.slice(0, end);
 }
 
-function fieldCharacterCount(field) {
-  return field.name.length + field.value.length;
-}
-
 function normalizeInlineText(value) {
   return value.replace(/\s+/gu, ' ').trim();
+}
+
+function formatShortcutText(value, boldMembers = true) {
+  const memberMarkup = /\[@([^\]]+)\]\(shortcutapp:\/\/members\/[^)\s]+\)/giu;
+  let result = '';
+  let offset = 0;
+
+  for (const match of value.matchAll(memberMarkup)) {
+    result += escapeDiscordText(value.slice(offset, match.index));
+    result += boldMembers ? `**@${escapeDiscordText(match[1])}**` : `@${escapeDiscordText(match[1])}`;
+    offset = match.index + match[0].length;
+  }
+
+  return result + escapeDiscordText(value.slice(offset));
+}
+
+function escapeDiscordText(value) {
+  return value
+    .replace(/<(?=[@#])/gu, '<\u200b')
+    .replace(/@(?=everyone\b|here\b)/giu, '@\u200b')
+    .replace(/\b(https?):\/\//giu, '$1:\u200b//')
+    .replace(/\bwww\./giu, 'www.\u200b.')
+    .replace(/\\/gu, '\\\\')
+    .replace(/([*_~|`<>#[\]()])/gu, '\\$1');
 }
 
 function ownerListIncludes(value, memberId) {
