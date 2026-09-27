@@ -29,11 +29,11 @@ function deliver(event) {
 }
 
 function messageText(result) {
-  return result.payload.content.replace(/^<@\d+> [^\n]*\n(?:Changed: [^\n]+\n)?\n/u, '');
+  return result.payload.content.replace(/^<@\d+>\n/u, '').replace(/\n\n<t:\d+:F>$/u, '');
 }
 
 function messageSummary(result) {
-  return messageText(result).split('\n').slice(1).join('\n');
+  return messageText(result).split('\n').slice(2).join('\n');
 }
 
 test('rejects malformed v1 envelopes before self-action filtering', () => {
@@ -147,7 +147,7 @@ test('suppresses a well-formed event authored by the configured member', () => {
   });
 });
 
-test('ignores Epic, task, deletion, and unrelated-field actions', () => {
+test('ignores Epic, task, deletion, and label-only actions', () => {
   const event = syntheticEvent({
     ownerIds: [TARGET_MEMBER_ID],
     actions: [
@@ -157,7 +157,7 @@ test('ignores Epic, task, deletion, and unrelated-field actions', () => {
       { id: 4, entity_type: 'task', action: 'update', story_id: 4 },
       storyAction(5, 'update', {
         name: 'Only unrelated fields',
-        changes: { description: scalarChange('before', 'after') },
+        changes: { labels: scalarChange('before', 'after') },
       }),
     ],
   });
@@ -207,14 +207,14 @@ test('formats one current-owned Story with reference names, allowed fields, and 
   assert.deepEqual(result.storyIds, [101]);
   assert.deepEqual(result.actionTypes, ['story.update']);
   assert.deepEqual(Object.keys(result.payload).sort(), ['allowed_mentions', 'content']);
-  assert.match(result.payload.content, new RegExp(`^<@${DISCORD_USER_ID}> Workflow: Ready for Deploy.*\\nChanged: ${event.changed_at}\\n\\n`));
+  assert.match(result.payload.content, new RegExp(`^<@${DISCORD_USER_ID}>\\n### .*\\n\\nUpdated workflow: \\*\\*Ready for Deploy\\*\\*`));
+  assert.ok(result.payload.content.endsWith('<t:1735787045:F>'));
   assert.deepEqual(result.payload.allowed_mentions, { users: [DISCORD_USER_ID] });
-  assert.ok(messageText(result).startsWith('[Deploy release \\(\\#101\\)](https://app.shortcut.com/synthetic-workspace/story/101)'));
+  assert.ok(messageText(result).startsWith('### [Deploy release](https://app.shortcut.com/synthetic-workspace/story/101)'));
   assert.equal(
     messageSummary(result),
-    ['Workflow: Ready for Deploy', 'Deadline: 2025-02-03', 'Estimate: 5'].join('\n'),
+    ['Updated workflow: **Ready for Deploy**', 'Updated deadline: **2025-02-03**', 'Updated estimate: **5**', 'Updated description: **private new text**'].join('\n'),
   );
-  assert.doesNotMatch(result.payload.content, /private new text/);
 });
 
 test('falls back to a workflow ID when its reference is absent', () => {
@@ -230,7 +230,42 @@ test('falls back to a workflow ID when its reference is absent', () => {
     }),
   );
 
-  assert.match(messageSummary(result), /Workflow: 99/);
+  assert.match(messageSummary(result), /Updated workflow: \*\*99\*\*/);
+});
+
+test('formats created Stories with safe creator attribution, a linked heading, and Discord timestamp', () => {
+  const event = syntheticEvent({ actions: [storyAction(301, 'create', {
+    name: 'Deploy release', description: 'Prepare rollout.', ownerIds: [TARGET_MEMBER_ID],
+  })] });
+  const result = processEvent(event, { ...relayOptions, authorNames: new Map([[OTHER_MEMBER_ID, 'Alice *Admin*']]) });
+  assert.equal(result.outcome, 'deliver');
+  assert.deepEqual(result.creatorIds, [OTHER_MEMBER_ID]);
+  assert.equal(result.payload.content,
+    `<@${DISCORD_USER_ID}>\n### [Deploy release](https://app.shortcut.com/synthetic-workspace/story/301)\n\n-# Created by: @Alice \\*Admin\\*\n\nPrepare rollout.\n\n<t:1735787045:F>`);
+  assert.deepEqual(result.payload.allowed_mentions, { users: [DISCORD_USER_ID] });
+
+  const unsafeName = processEvent(event, { ...relayOptions, authorNames: new Map([[OTHER_MEMBER_ID, 'everyone']]) });
+  assert.match(unsafeName.payload.content, /-# Created by: @\u200beveryone/u);
+});
+
+test('formats expanded Story updates without allowing text to become Discord markup', () => {
+  const event = syntheticEvent({ ownerIds: [TARGET_MEMBER_ID], actions: [storyAction(301, 'update', {
+    name: 'New title', changes: {
+      name: scalarChange('Old title', 'New title'),
+      story_type: scalarChange('feature', 'bug'),
+      description: scalarChange('Old text', '@everyone <@987654321>'),
+    },
+  })] });
+  const result = deliver(event);
+  assert.equal(result.payload.content,
+    `<@${DISCORD_USER_ID}>\n### [New title](https://app.shortcut.com/synthetic-workspace/story/301)\n\nUpdated title: **New title**\nUpdated description: **@\u200beveryone \\<\u200b@987654321\\>**\nUpdated type: **bug**\n\n<t:1735787045:F>`);
+  assert.deepEqual(result.actionTypes, ['story.update']);
+
+  const renamed = deliver(syntheticEvent({ actions: [
+    storyAction(301, 'create', { name: 'Old title', ownerIds: [TARGET_MEMBER_ID] }),
+    storyAction(301, 'update', { changes: { name: scalarChange('Old title', 'New title') } }),
+  ] }));
+  assert.match(renamed.payload.content, /### \[New title\]/u);
 });
 
 test('delivers a created Story owned through its direct synthetic owner_ids shape', () => {
@@ -245,7 +280,7 @@ test('delivers a created Story owned through its direct synthetic owner_ids shap
     }),
   );
 
-  assert.equal(messageSummary(result), 'Story created');
+  assert.equal(messageSummary(result), '-# Created by: Shortcut member');
   assert.deepEqual(result.storyIds, [301]);
   assert.deepEqual(result.actionTypes, ['story.create']);
 });
@@ -259,7 +294,7 @@ test('includes safe plain-text descriptions, Shortcut members, links, and a sing
   assert.match(messageSummary(result), /\\\*\\\*Details\\\*\\\*/u);
   assert.match(messageSummary(result), /@\u200beveryone/u);
   assert.match(messageSummary(result), /\*\*@Jane\*\*/u);
-  assert.match(content.split('\n')[0], /Story created.*Details.*First item.*@\u200beveryone.*\*\*@Jane\*\*/u);
+  assert.equal(content.split('\n')[0], `<@${DISCORD_USER_ID}>`);
   assert.match(messageSummary(result), /\\\[docs\\\]\\\(https:\u200b\/\/example\.com\\\)/u);
   assert.doesNotMatch(content, /<@987654321>/u);
   assert.deepEqual(result.payload.allowed_mentions, { users: [DISCORD_USER_ID] });
@@ -279,7 +314,7 @@ test('omits unavailable descriptions and bounds long summaries within Discord co
     const result = deliver(syntheticEvent({
       actions: [storyAction(301, 'create', { ownerIds: [TARGET_MEMBER_ID], description })],
     }));
-    assert.equal(messageSummary(result), 'Story created');
+    assert.equal(messageSummary(result), '-# Created by: Shortcut member');
   }
   for (const count of [1, 10]) {
     const result = deliver(syntheticEvent({
@@ -289,7 +324,7 @@ test('omits unavailable descriptions and bounds long summaries within Discord co
       })),
     }));
     assert.ok(result.payload.content.length <= 2000);
-    assert.match(messageSummary(result), /^Story created\n\nDetails\n/u);
+    assert.match(messageSummary(result), /^-# Created by: Shortcut member\n\nDetails\n/u);
     assert.match(result.payload.content, /additional changes omitted/u);
     if (count === 10) assert.match(result.payload.content, /9 more stories omitted/u);
   }
@@ -297,8 +332,8 @@ test('omits unavailable descriptions and bounds long summaries within Discord co
 
 test('delivers ownership addition and removal without aggregate ownership', () => {
   for (const [change, expectedSummary] of [
-    [ownerIdsChange({ adds: [TARGET_MEMBER_ID] }), 'You were added as an owner'],
-    [ownerIdsChange({ removes: [TARGET_MEMBER_ID] }), 'You were removed as an owner'],
+    [ownerIdsChange({ adds: [TARGET_MEMBER_ID] }), 'Updated owners: **You were added as an owner**'],
+    [ownerIdsChange({ removes: [TARGET_MEMBER_ID] }), 'Updated owners: **You were removed as an owner**'],
   ]) {
     const result = deliver(
       syntheticEvent({
@@ -315,7 +350,7 @@ test('delivers ownership addition and removal without aggregate ownership', () =
   }
 });
 
-test('ignores an unowned eligible change and an owned update outside the field allowlist', () => {
+test('ignores an unowned eligible change and an owned label-only update', () => {
   const unowned = syntheticEvent({
     ownerIds: [OTHER_MEMBER_ID],
     actions: [
@@ -329,11 +364,8 @@ test('ignores an unowned eligible change and an owned update outside the field a
     ownerIds: [TARGET_MEMBER_ID],
     actions: [
       storyAction(402, 'update', {
-        name: 'Only description changed',
-        changes: {
-          description: scalarChange('old', 'new'),
-          labels: scalarChange('old labels', 'new labels'),
-        },
+        name: 'Only labels changed',
+        changes: { labels: scalarChange('old labels', 'new labels') },
       }),
     ],
   });
@@ -353,7 +385,7 @@ test('associates synthetic comments only by direct story_id and normalizes excer
     }),
   );
 
-  assert.ok(messageText(result).startsWith('[Story \\#501](https://app.shortcut.com/synthetic-workspace/story/501)'));
+  assert.ok(messageText(result).startsWith('### [Story \\#501](https://app.shortcut.com/synthetic-workspace/story/501)'));
   assert.equal(messageSummary(result), 'Comment added\n> First **@Jane** line\n\nComment updated\n> Second comment');
   assert.deepEqual(result.actionTypes, ['comment.create', 'comment.update']);
 });
@@ -422,7 +454,7 @@ test('orders multiple eligible Story groups by first eligible action and preserv
 
   const content = messageText(result);
   assert.ok(content.indexOf('Second in numeric order') < content.indexOf('First in numeric order'));
-  assert.match(content, /You were added as an owner\n\nComment added\n> Comment after ownership/u);
+  assert.match(content, /Updated owners: \*\*You were added as an owner\*\*\n\nComment added\n> Comment after ownership/u);
 });
 
 test('does not apply aggregate owner_ids to every Story and evaluates ownership per group', () => {
@@ -454,7 +486,7 @@ test('does not apply aggregate owner_ids to every Story and evaluates ownership 
   const result = deliver(perGroup);
 
   assert.deepEqual(result.storyIds, [701]);
-  assert.ok(messageText(result).startsWith('[Individually owned \\(\\#701\\)]'));
+  assert.ok(messageText(result).startsWith('### [Individually owned]'));
   assert.doesNotMatch(messageSummary(result), /2025-05-01/);
 });
 
@@ -537,7 +569,7 @@ test('bounds a single Story title and description while reporting omitted change
     }),
   );
   assert.ok(result.payload.content.length <= 2000);
-  assert.ok(messageText(result).startsWith(`[${'T'.repeat(247)}… \\(\\#1201\\)]`));
+  assert.ok(messageText(result).startsWith(`### [${'T'.repeat(255)}…]`));
   assert.match(result.payload.content, /additional changes omitted/u);
 });
 
@@ -580,7 +612,7 @@ test('observed optional reference shapes do not block eligible changes or bypass
     });
     delete event.references;
     Object.assign(event, shape);
-    assert.equal(messageSummary(deliver(event)), 'Workflow: 2');
+    assert.equal(messageSummary(deliver(event)), 'Updated workflow: **2**');
     assert.equal(processEvent({ ...event, member_id: TARGET_MEMBER_ID }, relayOptions).outcome, 'ignored');
     assert.equal(processEvent({ ...event, owner_ids: [] }, relayOptions).outcome, 'ignored');
   }
@@ -592,9 +624,9 @@ test('unnamed workflow references use the ID fallback without hiding available n
     actions: [storyAction(42, 'update', { changes: { workflow_state_id: scalarChange(1, 2) } })],
     references: [{ id: 2, entity_type: 'workflow-state' }],
   });
-  assert.equal(messageSummary(deliver(event)), 'Workflow: 2');
+  assert.equal(messageSummary(deliver(event)), 'Updated workflow: **2**');
   event.references.push(workflowReference(2, 'Ready'));
-  assert.equal(messageSummary(deliver(event)), 'Workflow: Ready');
+  assert.equal(messageSummary(deliver(event)), 'Updated workflow: **Ready**');
 });
 
 test('relays observed story-comment creation through explicit Story comment_ids.adds', () => {
@@ -604,7 +636,7 @@ test('relays observed story-comment creation through explicit Story comment_ids.
     const result = deliver(event);
     assert.deepEqual(result.storyIds, [501]);
     assert.deepEqual(result.actionTypes, ['comment.create']);
-    assert.ok(messageText(result).startsWith('[Example Story \\(\\#501\\)](https://app.shortcut.com/synthetic-workspace/story/501)'));
+    assert.ok(messageText(result).startsWith('### [Example Story](https://app.shortcut.com/synthetic-workspace/story/501)'));
     assert.equal(messageSummary(result), 'Comment added\n> Example comment text');
   }
 });
@@ -679,12 +711,15 @@ test('comment author names are bounded, escaped, and restricted to eligible grou
   const result = processEvent(event, { ...relayOptions, authorNames });
   assert.deepEqual(result.commentAuthorIds, [authorId]);
   assert.equal(messageSummary(result),
-    '**Alice \\*Admin\\* \\<\u200b@123\\> \\[link\\]\\(url\\)** commented\n> Example comment text');
-  assert.match(result.payload.content, new RegExp(`^<@${DISCORD_USER_ID}> \\*\\*Alice.*\\nChanged: `));
+    '**@Alice \\*Admin\\* \\<\u200b@123\\> \\[link\\]\\(url\\)** commented\n> Example comment text');
+  authorNames.set(authorId, 'here');
+  assert.match(processEvent(event, { ...relayOptions, authorNames }).payload.content, /\*\*@\u200bhere\*\* commented/u);
+  authorNames.set(authorId, '  Alice *Admin* <@123>\n[link](url)  ');
+  assert.match(result.payload.content, new RegExp(`^<@${DISCORD_USER_ID}>\\n### .*\\n\\n\\*\\*@Alice`));
   assert.deepEqual(result.payload.allowed_mentions, { users: [DISCORD_USER_ID] });
   authorNames.set(authorId, 'A'.repeat(1000));
   assert.equal(messageSummary(processEvent(event, { ...relayOptions, authorNames })),
-    `**${'A'.repeat(79)}…** commented\n> Example comment text`);
+    `**@${'A'.repeat(79)}…** commented\n> Example comment text`);
 
   const unowned = structuredClone(event.actions[1]);
   unowned.id = 502;
@@ -700,12 +735,13 @@ test('plain-text layout separates quotes and preserves story, timestamp, and sum
   const authorNames = new Map([[authorId, 'Alice Example']]);
   event.actions[1].changes.workflow_state_id = scalarChange(1, 2);
   const result = processEvent(event, { ...relayOptions, authorNames });
-  assert.ok(result.payload.content.includes('[Example Story \\(\\#501\\)](https://app.shortcut.com/synthetic-workspace/story/501)'));
-  assert.match(result.payload.content, /^<@\d+> \*\*Alice Example\*\* commented > Example comment text.*\nChanged: 2025-01-02T03:04:05\.000Z\n\n/u);
-  assert.equal(messageSummary(result), '**Alice Example** commented\n> Example comment text\n\nWorkflow: 2');
+  assert.ok(result.payload.content.includes('### [Example Story](https://app.shortcut.com/synthetic-workspace/story/501)'));
+  assert.match(result.payload.content, /^<@\d+>\n### .*\n\n\*\*@Alice Example\*\* commented\n> Example comment text/u);
+  assert.ok(result.payload.content.endsWith('<t:1735787045:F>'));
+  assert.equal(messageSummary(result), '**@Alice Example** commented\n> Example comment text\n\nUpdated workflow: **2**');
 
   delete event.actions[0].text;
   delete event.actions[1].changes.workflow_state_id;
   assert.equal(messageSummary(processEvent(event, { ...relayOptions, authorNames })),
-    '**Alice Example** commented');
+    '**@Alice Example** commented');
 });

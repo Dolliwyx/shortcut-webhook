@@ -37,6 +37,7 @@ export function processEvent(event, options) {
     shortcutMemberId: options.shortcutMemberId,
     workflowReferences,
     authorNames: options.authorNames,
+    creatorId: event.member_id,
   });
 
   if (eligibleGroups.length === 0) {
@@ -52,6 +53,8 @@ export function processEvent(event, options) {
     commentAuthorIds: [...new Set(eligibleGroups.flatMap((group) => group.actionRecords
       .filter((record) => record.entityType === 'comment' && typeof record.action.author_id === 'string')
       .map((record) => record.action.author_id)))],
+    creatorIds: eligibleGroups.some((group) => group.actionRecords.some((record) =>
+      record.entityType === 'story' && record.operation === 'create')) ? [event.member_id] : [],
   };
 }
 
@@ -221,6 +224,7 @@ function evaluateGroups({
   shortcutMemberId,
   workflowReferences,
   authorNames,
+  creatorId,
 }) {
   const aggregateOwnershipApplies =
     resolvedStoryIds.size === 1 && ownerListIncludes(aggregateOwnerIds, shortcutMemberId);
@@ -239,7 +243,7 @@ function evaluateGroups({
         const excerpt = commentExcerpt(action);
         const name = authorNames?.get(action.author_id);
         const author = isNonemptyString(name)
-          ? `**${formatShortcutText(clipWithEllipsis(normalizeInlineText(name), 80), false)}**`
+          ? `**${formatShortcutText(`@${clipWithEllipsis(normalizeInlineText(name), 80)}`, false)}**`
           : null;
         const label = operation === 'create'
           ? (author ? `${author} commented` : 'Comment added')
@@ -256,12 +260,14 @@ function evaluateGroups({
         if (ownerListIncludes(action.owner_ids, shortcutMemberId)) {
           ownedByCreation = true;
         }
+        const creator = authorNames?.get(creatorId);
         summaries.push({
           index: actionRecord.index,
           actionType: 'story.create',
-          text: isNonemptyString(action.description)
-            ? `Story created\n\n${formatShortcutText(action.description.trim())}`
-            : 'Story created',
+          text: `-# Created by: ${isNonemptyString(creator)
+            ? formatShortcutText(`@${clipWithEllipsis(normalizeInlineText(creator), 80)}`, false)
+            : 'Shortcut member'}` + (isNonemptyString(action.description)
+            ? `\n\n${formatShortcutText(action.description.trim())}` : ''),
         });
         continue;
       }
@@ -273,7 +279,7 @@ function evaluateGroups({
           summaries.push({
             index: actionRecord.index,
             actionType: 'story.update',
-            text: 'You were added as an owner',
+            text: 'Updated owners: **You were added as an owner**',
           });
         }
         if (ownerChange.removes.includes(shortcutMemberId)) {
@@ -281,7 +287,7 @@ function evaluateGroups({
           summaries.push({
             index: actionRecord.index,
             actionType: 'story.update',
-            text: 'You were removed as an owner',
+            text: 'Updated owners: **You were removed as an owner**',
           });
         }
       }
@@ -291,7 +297,7 @@ function evaluateGroups({
         summaries.push({
           index: actionRecord.index,
           actionType: 'story.update',
-          text: `Workflow: ${workflowDisplayValue(workflowChange.new, workflowReferences)}`,
+          text: `Updated workflow: **${workflowDisplayValue(workflowChange.new, workflowReferences)}**`,
         });
       }
 
@@ -300,7 +306,7 @@ function evaluateGroups({
         summaries.push({
           index: actionRecord.index,
           actionType: 'story.update',
-          text: `Deadline: ${displayValue(deadlineChange.new, 'No deadline')}`,
+          text: `Updated deadline: **${displayValue(deadlineChange.new, 'No deadline')}**`,
         });
       }
 
@@ -309,8 +315,23 @@ function evaluateGroups({
         summaries.push({
           index: actionRecord.index,
           actionType: 'story.update',
-          text: `Estimate: ${displayValue(estimateChange.new, 'No estimate')}`,
+          text: `Updated estimate: **${displayValue(estimateChange.new, 'No estimate')}**`,
         });
+      }
+
+      for (const [field, label, fallback] of [
+        ['name', 'title', 'No title'],
+        ['description', 'description', 'No description'],
+        ['story_type', 'type', 'No type'],
+      ]) {
+        const change = scalarChange(action.changes, field);
+        if (change !== null) {
+          summaries.push({
+            index: actionRecord.index,
+            actionType: 'story.update',
+            text: `Updated ${label}: **${displayValue(change.new, fallback)}**`,
+          });
+        }
       }
     }
 
@@ -408,12 +429,13 @@ function displayValue(value, nullLabel) {
 }
 
 function storyTitle(group) {
-  for (const actionRecord of group.actionRecords) {
-    if (actionRecord.entityType !== 'story' || typeof actionRecord.action.name !== 'string') {
-      continue;
-    }
+  for (const actionRecord of group.actionRecords.toReversed()) {
+    if (actionRecord.entityType !== 'story') continue;
+    const changedName = scalarChange(actionRecord.action.changes, 'name')?.new;
+    const title = typeof changedName === 'string' ? changedName : actionRecord.action.name;
+    if (typeof title !== 'string') continue;
 
-    const name = normalizeInlineText(actionRecord.action.name);
+    const name = normalizeInlineText(title);
     if (name.length > 0) {
       return name;
     }
@@ -431,23 +453,21 @@ function buildDiscordPayload(changedAt, groups, options) {
 
 function discordContent(changedAt, groups, options) {
   const timestamp = Date.parse(changedAt);
-  const preview = clipWithEllipsis(summaryText(groups[0]).replace(/\s+/gu, ' '), 120);
-  const prefix = [`<@${options.discordUserId}> ${preview}`, ...(Number.isFinite(timestamp)
-    ? [`Changed: ${new Date(timestamp).toISOString()}`]
-    : [])].join('\n');
+  const prefix = `<@${options.discordUserId}>`;
+  const suffix = Number.isFinite(timestamp) ? `\n\n<t:${Math.floor(timestamp / 1000)}:F>` : '';
   const blocks = groups.map((group) => storyBlock(group, options.workspaceSlug));
-  const complete = `${prefix}\n\n${blocks.join('\n\n')}`;
+  const complete = `${prefix}\n${blocks.join('\n\n')}${suffix}`;
   if (complete.length <= MAX_DISCORD_CONTENT) {
     return complete;
   }
 
   let content = prefix;
   for (let index = 0; index < groups.length; index += 1) {
-    const separator = '\n\n';
+    const separator = index === 0 ? '\n' : '\n\n';
     const candidate = `${content}${separator}${blocks[index]}`;
     const omittedStories = groups.length - index - 1;
     const omission = omissionText(omittedStories, false);
-    if (candidate.length + (omittedStories > 0 ? separator.length + omission.length : 0) <= MAX_DISCORD_CONTENT) {
+    if (candidate.length + suffix.length + (omittedStories > 0 ? omission.length + 2 : 0) <= MAX_DISCORD_CONTENT) {
       content = candidate;
       continue;
     }
@@ -455,33 +475,32 @@ function discordContent(changedAt, groups, options) {
     const header = storyHeader(groups[index], options.workspaceSlug);
     const marker = omissionText(omittedStories, true);
     const summary = summaryText(groups[index]);
-    const summaryStart = `${content}${separator}${header}\n`;
-    const available = MAX_DISCORD_CONTENT - summaryStart.length - marker.length;
+    const summaryStart = `${content}${separator}${header}\n\n`;
+    const available = MAX_DISCORD_CONTENT - summaryStart.length - marker.length - suffix.length;
     if (available >= 0) {
-      return `${summaryStart}${clipText(summary, available)}${marker}`;
+      return `${summaryStart}${clipText(summary, available)}${marker}${suffix}`;
     }
 
-    return `${content}${separator}${omissionText(omittedStories + 1, false)}`;
+    return `${content}${separator}${omissionText(omittedStories + 1, false)}${suffix}`;
   }
 
-  return content;
+  return content + suffix;
 }
 
 function storyBlock(group, workspaceSlug) {
-  return `${storyHeader(group, workspaceSlug)}\n${summaryText(group)}`;
+  return `${storyHeader(group, workspaceSlug)}\n\n${summaryText(group)}`;
 }
 
 function storyHeader(group, workspaceSlug) {
-  const suffix = ` (#${group.storyId})`;
   const title = group.title === null
     ? `Story #${group.storyId}`
-    : `${clipWithEllipsis(group.title, 256 - suffix.length)}${suffix}`;
+    : clipWithEllipsis(group.title, 256);
   const label = formatShortcutText(title);
   const url = storyUrl(workspaceSlug, group.storyId);
 
   return url.length <= 1000
-    ? `[${label}](${url})`
-    : `${label} (Shortcut link omitted: workspace URL exceeds message limit)`;
+    ? `### [${label}](${url})`
+    : `### ${label} (Shortcut link omitted: workspace URL exceeds message limit)`;
 }
 
 function omissionText(omittedStories, omittedChanges) {

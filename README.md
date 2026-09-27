@@ -2,7 +2,7 @@
 
 Use this Node.js service to notify one Discord user about meaningful changes to Shortcut Stories they own. The service has no external dependencies.
 
-The relay verifies each Shortcut webhook signature, filters the event, and sends one Discord plain-text message for each eligible event. Messages lead with the configured user ping and a short change preview, followed by a timestamp when valid, clickable Story links, and compact change summaries. Shortcut member markup is shown as bold text; untrusted text cannot create extra mentions or Markdown links.
+The relay verifies each Shortcut webhook signature, filters the event, and sends one Discord message for each eligible event. Messages mention the configured user, show clickable Story headings and changes, and end with a Discord timestamp in each viewer's local time when the event time is valid. Shortcut member names are displayed as non-pinging text; untrusted text cannot create extra mentions or Markdown links.
 
 ## Supported notifications
 
@@ -10,10 +10,10 @@ The relay notifies you about these changes to Stories owned by the configured Sh
 
 - Story creation.
 - Addition or removal of the configured member as an owner. Removal remains eligible even when the member no longer owns the Story.
-- Workflow state, deadline, or estimate changes.
-- Comment creation, with a short excerpt when available. Commenter display names are optional.
+- Workflow state, deadline, estimate, title, description, or Story type changes.
+- Comment creation, with a short excerpt when available. Commenter and creator display names are optional.
 
-The relay ignores actions performed by the configured member. It also ignores unowned Stories, tasks, deletions, Epic-only events, and changes limited to titles, descriptions, or labels.
+The relay ignores actions performed by the configured member. It also ignores unowned Stories, tasks, deletions, Epic-only events, and label-only changes.
 
 If ownership or a comment's relationship to a Story is ambiguous, the relay ignores the change. Real comment-update events are not yet supported.
 
@@ -43,7 +43,7 @@ Keep your `.env` file, API tokens, Discord webhook URL, and raw workspace payloa
    ```
 
    Save this value for both the relay configuration and the Shortcut outgoing webhook settings.
-6. Optional: To show commenter display names, create a token in Shortcut's API Tokens settings for the same workspace. Without a token, the relay sends comments without display names. Lookup failures do not block notification delivery.
+6. Optional: To show commenter and Story creator names, create a token in Shortcut's API Tokens settings for the same workspace. Without a token, the relay uses generic attribution. Lookup failures do not block notification delivery.
 
 ### Install and configure the service
 
@@ -70,7 +70,7 @@ The following table describes the environment variables:
 | `SHORTCUT_WORKSPACE_SLUG` | Yes | Workspace path segment used in Story links. |
 | `DISCORD_WEBHOOK_URL` | Yes | Incoming webhook URL in the format `https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN`. Replace `WEBHOOK_ID` with the numeric webhook ID and `WEBHOOK_TOKEN` with its token. |
 | `DISCORD_USER_ID` | Yes | Numeric Discord user ID to mention. |
-| `SHORTCUT_API_TOKEN` | No | Token for commenter display-name lookups. Leave blank to disable lookups. |
+| `SHORTCUT_API_TOKEN` | No | Token for commenter and creator display-name lookups. Leave blank to disable lookups. |
 | `PORT` | No | Listening port from `1` through `65535`. Defaults to `3000`. |
 | `SHORTCUT_DIAGNOSTICS` | No | Set to `1` for temporary local event-structure diagnostics. Leave set to `0` in production. |
 
@@ -220,13 +220,13 @@ To run the automated tests, use:
 pnpm test
 ```
 
-Tests cover filtering, formatting, signatures, configuration, HTTP responses, Discord delivery, and commenter-name lookups. External service calls are mocked. These tests don't verify a live deployment; also complete the [notification delivery checks](#verify-notification-delivery).
+Tests cover filtering, formatting, signatures, configuration, HTTP responses, Discord delivery, and member-name lookups. External service calls are mocked. These tests don't verify a live deployment; also complete the [notification delivery checks](#verify-notification-delivery).
 
 ## Limitations
 
 - The relay supports one Shortcut workspace, one Shortcut member, and one Discord channel.
 - There is no database, queue, retry mechanism, or duplicate suppression. Failed deliveries can lose notifications. Duplicate or replayed valid events can produce duplicate messages.
-- Discord delivery has a 5-second timeout. Optional commenter lookups can add up to 2 seconds.
+- Discord delivery has a 5-second timeout. Optional member lookups can add up to 2 seconds.
 - Real comment-update events remain unsupported until their relationship to Stories is confirmed.
 
 For the full scope, security contract, and acceptance criteria, see the [MVP specification](MVP.md). For confirmed and provisional webhook structures, see the [test fixture documentation](test/fixtures/README.md).

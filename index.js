@@ -236,9 +236,10 @@ async function handleRequest(request, response, config, dependencies) {
     return;
   }
 
-  if (config.shortcutApiToken && result.commentAuthorIds.length > 0) {
+  const authorIds = [...new Set([...result.commentAuthorIds, ...result.creatorIds])];
+  if (config.shortcutApiToken && authorIds.length > 0) {
     const authorNames = await lookupMemberNames(
-      result.commentAuthorIds, config.shortcutApiToken, dependencies.fetchImpl, dependencies.memberTimeoutMs,
+      authorIds, config.shortcutApiToken, dependencies.fetchImpl, dependencies.memberTimeoutMs,
     );
     // Reformat through the same pure path so names obey the content limit.
     result = processEvent(event, { ...relayOptions, authorNames });

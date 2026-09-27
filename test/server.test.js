@@ -305,7 +305,7 @@ test('delivers one real HTTP JSON Discord request with wait=true', async () => {
 
     const payload = JSON.parse(request.body);
     assert.deepEqual(Object.keys(payload).sort(), ['allowed_mentions', 'content']);
-    assert.ok(payload.content.startsWith(`<@${DISCORD_USER_ID}> Story created\nChanged: 2025-01-02T03:04:05.000Z\n\n[PRIVATE STORY TITLE \\(\\#42\\)](https://app.shortcut.com/example-workspace/story/42)\nStory created`));
+    assert.equal(payload.content, `<@${DISCORD_USER_ID}>\n### [PRIVATE STORY TITLE](https://app.shortcut.com/example-workspace/story/42)\n\n-# Created by: Shortcut member\n\n<t:1735787045:F>`);
     assert.ok(payload.content.length <= 2000);
     assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
 
@@ -527,9 +527,10 @@ test('confirmed comment shape sends one bounded Discord message without logging 
     assert.equal(requests.length, 1);
     const payload = JSON.parse(requests[0].body);
     assert.deepEqual(Object.keys(payload).sort(), ['allowed_mentions', 'content']);
-    assert.ok(payload.content.includes('[Example Story \\(\\#501\\)](https://app.shortcut.com/example-workspace/story/501)'));
+    assert.ok(payload.content.includes('### [Example Story](https://app.shortcut.com/example-workspace/story/501)'));
     assert.match(payload.content, /Comment added\n> Example comment text/u);
-    assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}> Comment added.*\\nChanged: `));
+    assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}>\\n### .*\\n\\nComment added`));
+    assert.ok(payload.content.endsWith('<t:1735787045:F>'));
     assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
     assert.equal(JSON.parse(logs.at(-1)).outcome, 'delivered');
     assert.equal(logs.join('\n').includes('Example comment'), false);
@@ -564,15 +565,36 @@ test('looks up the eligible comment author and includes their name only in messa
   });
   assert.equal(requests.length, 2);
   const payload = JSON.parse(requests[1].init.body);
-  assert.match(payload.content, /\*\*Alice Example\*\* commented\n> Example comment text/u);
-  assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}> \\*\\*Alice Example\\*\\* commented.*\\nChanged: `));
+  assert.match(payload.content, /\*\*@Alice Example\*\* commented\n> Example comment text/u);
+  assert.match(payload.content, new RegExp(`^<@${DISCORD_USER_ID}>\\n### .*\\n\\n\\*\\*@Alice Example`));
   assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
   for (const value of ['PRIVATE API TOKEN', 'Alice', 'Example comment text', authorId]) {
     assert.equal(logs.join('\n').includes(value), false, value);
   }
 });
 
-test('does not look up unsigned, invalid, ignored, unassociated, or non-comment events', async () => {
+test('resolves the creator name for eligible Story creation without extra Discord pings', async () => {
+  const requests = [];
+  await withServer(localConfig({ shortcutApiToken: 'PRIVATE API TOKEN' }), {
+    logger: () => {},
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      if (url.startsWith('https://api.app.shortcut.com/')) {
+        assert.equal(url, `https://api.app.shortcut.com/api/v3/members/${OTHER_MEMBER_ID}`);
+        return Response.json({ id: OTHER_MEMBER_ID, profile: { name: 'Alice Example' } });
+      }
+      return { status: 200 };
+    },
+  }, async (baseUrl) => {
+    assert.equal((await postWebhook(baseUrl, signedEvent(eligibleEvent()))).status, 204);
+  });
+  assert.equal(requests.length, 2);
+  const payload = JSON.parse(requests[1].init.body);
+  assert.match(payload.content, /-# Created by: @Alice Example/u);
+  assert.deepEqual(payload.allowed_mentions, { users: [DISCORD_USER_ID] });
+});
+
+test('looks up only eligible commenters and creators', async () => {
   let lookups = 0;
   let deliveries = 0;
   const comment = observedCommentCreate();
@@ -595,7 +617,7 @@ test('does not look up unsigned, invalid, ignored, unassociated, or non-comment 
     assert.equal((await postWebhook(baseUrl, signedEvent(eligibleEvent()))).status, 204);
     assert.equal((await fetch(`${baseUrl}/healthz`)).status, 200);
   });
-  assert.equal(lookups, 0);
+  assert.equal(lookups, 1);
   assert.equal(deliveries, 1);
 });
 
