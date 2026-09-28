@@ -1,0 +1,42 @@
+[
+  {
+    "name": "story-created",
+    "event": {"id":"event-1","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","actions":[{"id":42,"entity_type":"story","action":"create","name":"Example Story","owner_ids":["11111111-1111-4111-8111-111111111111"]}]},
+    "expectedOutcome": "deliver"
+  },
+  {
+    "name": "self-authored",
+    "event": {"id":"event-2","changed_at":"2025-01-02T03:04:05.000Z","member_id":"11111111-1111-4111-8111-111111111111","version":"v1","actions":[{"id":42,"entity_type":"story","action":"create","owner_ids":["11111111-1111-4111-8111-111111111111"]}]},
+    "expectedOutcome": "ignored"
+  },
+  {
+    "name": "invalid-before-self-suppression",
+    "event": {"id":"event-3","changed_at":"2025-01-02T03:04:05.000Z","member_id":"11111111-1111-4111-8111-111111111111","version":"v1","actions":[],"references":null},
+    "expectedOutcome": "invalid"
+  },
+  {
+    "name": "explicit-comment-association",
+    "event": {"id":"event-4","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","owner_ids":["11111111-1111-4111-8111-111111111111"],"actions":[{"id":5011,"entity_type":"story-comment","action":"create","text":"Hello 😀 @everyone"},{"id":501,"entity_type":"story","action":"update","name":"Example Story","changes":{"comment_ids":{"adds":[5011]}}}]},
+    "expectedOutcome": "deliver"
+  },
+  {
+    "name": "ambiguous-aggregate-ownership",
+    "event": {"id":"event-5","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","owner_ids":["11111111-1111-4111-8111-111111111111"],"actions":[{"id":42,"entity_type":"story","action":"update","changes":{"estimate":{"old":1,"new":2}}},{"id":43,"entity_type":"story","action":"update","changes":{"estimate":{"old":1,"new":3}}}]},
+    "expectedOutcome": "ignored"
+  },
+  {
+    "name": "owner-removal",
+    "event": {"id":"event-6","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","actions":[{"id":42,"entity_type":"story","action":"update","changes":{"owner_ids":{"removes":["11111111-1111-4111-8111-111111111111"]}}}]},
+    "expectedOutcome": "deliver"
+  },
+  {
+    "name": "real-comment-update-unsupported",
+    "event": {"id":"event-7","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","owner_ids":["11111111-1111-4111-8111-111111111111"],"actions":[{"id":5011,"entity_type":"story-comment","action":"update","story_id":501,"text":"Edited"}]},
+    "expectedOutcome": "ignored"
+  },
+  {
+    "name": "string-story-id-rejected",
+    "event": {"id":"event-8","changed_at":"2025-01-02T03:04:05.000Z","member_id":"22222222-2222-4222-8222-222222222222","version":"v1","actions":[{"id":"42","entity_type":"story","action":"create"}]},
+    "expectedOutcome": "invalid"
+  }
+]

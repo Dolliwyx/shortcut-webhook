@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
-FROM node:24.16.0-bookworm-slim
-
-ENV NODE_ENV=production
+FROM golang:1.27.1-bookworm AS build
 WORKDIR /app
+COPY go.mod ./
+COPY *.go ./
+COPY internal/ ./internal/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /relay .
 
-COPY package.json index.js ./
-COPY src/ ./src/
-
-USER node
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /relay /relay
 EXPOSE 3000
-CMD ["node", "index.js"]
+ENTRYPOINT ["/relay"]

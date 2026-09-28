@@ -7,6 +7,9 @@ node_modules/
 .env.*
 !.env.example
 
+# Go build output
+/shortcut-webhook
+
 # Logs and test coverage
 *.log
 coverage/

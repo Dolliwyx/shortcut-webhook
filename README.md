@@ -1,6 +1,6 @@
 # Shortcut-to-Discord webhook relay
 
-Use this Node.js service to notify one Discord user about meaningful changes to Shortcut Stories they own. The service has no external dependencies.
+Use this Go service to notify one Discord user about meaningful changes to Shortcut Stories they own. The service has no external dependencies.
 
 The relay verifies each Shortcut webhook signature, filters the event, and sends one Discord message for each eligible event. Messages mention the configured user, show clickable Story headings and changes, and end with a Discord timestamp in each viewer's local time when the event time is valid. Shortcut member names are displayed as non-pinging text; untrusted text cannot create extra mentions or Markdown links.
 
@@ -21,8 +21,7 @@ If ownership or a comment's relationship to a Story is ambiguous, the relay igno
 
 You need the following:
 
-- Node.js 24.16.x. The `.nvmrc` file specifies version 24.16.0.
-- pnpm 11.22.0 or a later 11.x release.
+- Go 1.27 or later, or Docker to build and run without a local Go installation.
 - Permission to configure a Shortcut outgoing webhook and a Discord incoming webhook.
 - A public HTTPS URL that forwards requests to the relay. For local testing, you can use an HTTPS tunnel.
 
@@ -47,11 +46,13 @@ Keep your `.env` file, API tokens, Discord webhook URL, and raw workspace payloa
 
 ### Install and configure the service
 
-1. From the repository root, install the project:
+1. From the repository root, build the relay:
 
    ```sh
-   pnpm install --frozen-lockfile
+   go build -o shortcut-webhook .
    ```
+
+   No third-party Go modules are required.
 
 2. If you don't already have a `.env` file, copy the configuration template:
 
@@ -79,16 +80,17 @@ The following table describes the environment variables:
 1. Run the automated tests:
 
    ```sh
-   pnpm test
+   go test -race ./...
+   go vet ./...
    ```
 
-2. Start the relay:
+2. Start the relay with the environment variables listed above exported by your shell or process manager:
 
    ```sh
-   pnpm start
+   ./shortcut-webhook
    ```
 
-   This command loads `.env` through Node.js environment-file support. Missing or invalid configuration causes startup to fail with a `configuration_error` log.
+   The binary does **not** load `.env`. For file-based configuration without a shell-specific loader, use `docker compose up --build`, which reads `.env`. The existing Compose configuration publishes the port on all host interfaces; use the loopback-only command in [Run with Docker](#run-with-docker) when a host reverse proxy is the only intended caller. Missing or invalid configuration causes startup to fail with a `configuration_error` log.
 
 3. In another terminal, check the health endpoint:
 
@@ -128,32 +130,34 @@ A visible Discord mention doesn't guarantee a push notification. Channel permiss
 
 ## Deploy the relay
 
-Use a host that supports a long-running Node.js process, environment variables, and public HTTPS.
+Use a host that supports a long-running binary or container, environment variables, and public HTTPS.
 
-1. Configure the host to use Node.js 24.16.x.
-2. Install the project:
+1. Install Go 1.27 or later on the build machine.
+2. Build the project for your target host:
 
    ```sh
-   pnpm install --frozen-lockfile
+   CGO_ENABLED=0 go build -trimpath -o shortcut-webhook .
    ```
+
+   Build on the target platform, or set `GOOS` and `GOARCH` for cross-compilation. Copy the binary to the host; Go is not needed at runtime. The host must have CA certificates for outbound HTTPS.
 
 3. Set the environment variables through the hosting platform's configuration or secret store. Leave diagnostics disabled.
 4. Set the start command to:
 
    ```sh
-   node index.js
+   ./shortcut-webhook
    ```
 
-   Use this command when the host injects environment variables. Unlike `pnpm start`, it doesn't require a `.env` file.
+   Configure the host to inject environment variables. The binary does not read `.env`.
 
-5. Configure the host or reverse proxy to forward HTTPS requests to the configured `PORT`. The Node.js process serves HTTP; the host or proxy provides HTTPS. Preserve the request body and `Payload-Signature` header because signatures depend on the exact request bytes.
+5. Configure the host or reverse proxy to forward HTTPS requests to the configured `PORT`. The Go process serves HTTP; the host or proxy provides HTTPS. Preserve the request body and `Payload-Signature` header because signatures depend on the exact request bytes.
 6. Set the health-check path to `/healthz`.
 7. [Connect the Shortcut webhook](#connect-the-shortcut-webhook) to the deployed URL.
 8. [Verify notification delivery](#verify-notification-delivery).
 
 ## Run with Docker
 
-Install Docker and make sure its daemon is running. You don't need Node.js or pnpm on the host for this option.
+Install Docker and make sure its daemon is running. You don't need Go on the host for this option. The image uses a multi-stage build and a non-root runtime with CA certificates.
 
 1. Create `.env` from `.env.example` if it doesn't already exist, then fill in the configuration values listed above. Use `KEY=value` lines without surrounding quotes and keep `PORT=3000`. Docker injects these variables at runtime; `.dockerignore` keeps the file out of the image.
 
@@ -217,10 +221,25 @@ Normal logs contain processing metadata, not Story names, comment text, or secre
 To run the automated tests, use:
 
 ```sh
-pnpm test
+go test -race ./...
+go vet ./...
 ```
 
 Tests cover filtering, formatting, signatures, configuration, HTTP responses, Discord delivery, and member-name lookups. External service calls are mocked. These tests don't verify a live deployment; also complete the [notification delivery checks](#verify-notification-delivery).
+
+### Compare with the Node reference
+
+`index.js`, `src/`, and the existing JavaScript tests remain as the migration reference. They are not included in the production image. With Node.js installed, compare Go results against the reference over shared fixtures and generated edge cases:
+
+```sh
+RELAY_NODE_PARITY=1 go test ./internal/relay -run TestNodeParity -v
+```
+
+The reference suite uses `pnpm test` (Node 24.16.x and pnpm 11.22.x as declared in `package.json`). Go's normal tests do not require Node or pnpm.
+
+Compatibility notes: Shortcut's RFC3339 timestamps are supported; unusual non-standard strings accepted by JavaScript's `Date.parse` may omit the timestamp in Go. Diagnostic object fields are sorted rather than kept in input order. Member API responses are capped at 1 MiB; oversized responses fall back to generic attribution. These differences do not expand supported event types.
+
+For cutover, keep the previous Node image available, replace the container behind the existing proxy, then perform the delivery checks above. Roll back by restoring that image with the same environment. Do not send each live event to both implementations: both would post to Discord.
 
 ## Limitations
 
@@ -229,4 +248,4 @@ Tests cover filtering, formatting, signatures, configuration, HTTP responses, Di
 - Discord delivery has a 5-second timeout. Optional member lookups can add up to 2 seconds.
 - Real comment-update events remain unsupported until their relationship to Stories is confirmed.
 
-For the full scope, security contract, and acceptance criteria, see the [MVP specification](MVP.md). For confirmed and provisional webhook structures, see the [test fixture documentation](test/fixtures/README.md).
+For confirmed and provisional webhook structures, see the [test fixture documentation](test/fixtures/README.md). The historical `MVP.md` specification is absent; the behavior described here and the regression tests define the migration contract.

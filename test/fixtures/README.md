@@ -23,10 +23,10 @@ Unsupported or ambiguous associations are intentionally ignored rather than infe
 
 ## Collect local shape diagnostics
 
-Stop the running relay with Ctrl+C, then restart it from the repository root:
+Build the Go relay (`go build -o shortcut-webhook .`) and export its required configuration variables. Stop the running relay with Ctrl+C, then restart it from the repository root:
 
 ```sh
-SHORTCUT_DIAGNOSTICS=1 pnpm start
+SHORTCUT_DIAGNOSTICS=1 ./shortcut-webhook
 ```
 
 This temporary mode adds an `outcome: "diagnostic"` line for each authenticated,
@@ -70,6 +70,15 @@ associations still require targeted diagnostics or a manually sanitized sample
 with relationships preserved. Do not label reconstructed examples as raw
 captures, commit private payloads, or use public webhook-capture services.
 
-Restart with plain `pnpm start` to disable diagnostics (also remove any
-`SHORTCUT_DIAGNOSTICS=1` setting from your shell or `.env`). Leave diagnostics off
-in production to retain the metadata-only logging contract in `MVP.md`.
+Restart with `SHORTCUT_DIAGNOSTICS=0 ./shortcut-webhook` to disable diagnostics (also remove any
+`SHORTCUT_DIAGNOSTICS=1` setting from your shell or `.env`). For Docker, update `.env` and recreate the container. Leave diagnostics off
+in production to retain the metadata-only logging contract in the root README.
+
+## Go migration fixtures
+
+`parity-cases.json` contains synthetic event inputs and expected outcomes shared by
+Go tests and the Node migration oracle. `test/node-parity.mjs` adds deterministic
+validation, Unicode, escaping, ownership, and formatting edge cases and evaluates
+them through the retained JavaScript implementation. Run
+`RELAY_NODE_PARITY=1 go test ./internal/relay -run TestNodeParity` to compare payloads,
+metadata, and validation diagnostics. No external API calls or private payloads are used.
